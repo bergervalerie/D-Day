@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>D-Day Scanner</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --pink: #ff2d78; --dark: #0a0a0a; }
+  body { background: #000; color: white; font-family: 'DM Sans', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; }
+  .logo { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; letter-spacing: 6px; color: var(--pink); line-height: 1; margin-bottom: 1.5rem; }
+  .scanner-wrap { position: relative; width: 100%; max-width: 340px; aspect-ratio: 1; border-radius: 16px; overflow: hidden; }
+  #scanner-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .scanner-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .scanner-box { width: 65%; aspect-ratio: 1; border: 2px solid var(--pink); border-radius: 8px; box-shadow: 0 0 0 9999px rgba(0,0,0,.55); }
+  #scanner-canvas { display: none; }
+  .hint { color: rgba(255,255,255,.45); font-size: .85rem; text-align: center; margin-top: 1.2rem; min-height: 1.3em; }
+  .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--pink); margin-right: 6px; animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .error-box { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 2rem; max-width: 300px; text-align: center; }
+  .error-box p { color: rgba(255,255,255,.5); font-size: .9rem; line-height: 1.6; margin-top: .5rem; }
+  .btn { background: var(--pink); color: white; border: none; padding: .8rem 2rem; border-radius: 50px; font-family: 'DM Sans', sans-serif; font-size: .9rem; font-weight: 700; cursor: pointer; margin-top: 1.2rem; }
+</style>
+</head>
+<body>
+
+<div class="logo">D-DAY</div>
+
+<div class="scanner-wrap" id="scanner-wrap">
+  <video id="scanner-video" autoplay playsinline muted></video>
+  <canvas id="scanner-canvas"></canvas>
+  <div class="scanner-overlay"><div class="scanner-box"></div></div>
+</div>
+
+<p class="hint" id="hint"><span class="status-dot"></span>Kamera wird gestartet…</p>
+
+<div class="error-box" id="error-box" style="display:none">
+  <div class="logo" style="font-size:2rem">D-DAY</div>
+  <p id="error-msg">Fehler</p>
+  <button class="btn" onclick="startScanner()">Nochmal versuchen</button>
+</div>
+
+<script>
+const BASE_URL = 'https://bergervalerie.github.io/D-Day/player.html';
+let stream = null;
+let animFrame = null;
+let locked = false;
+let detector = null;
+
+function setHint(text) { document.getElementById('hint').innerHTML = `<span class="status-dot"></span>${text}`; }
+function showError(msg) {
+  document.getElementById('scanner-wrap').style.display = 'none';
+  document.getElementById('hint').style.display = 'none';
+  document.getElementById('error-msg').textContent = msg;
+  document.getElementById('error-box').style.display = 'block';
+}
+
+function extractTrackId(raw) {
+  const patterns = [
+    /[?&]id=([A-Za-z0-9]{22})/,
+    /open\.spotify\.com\/track\/([A-Za-z0-9]{22})/,
+    /spotify:track:([A-Za-z0-9]{22})/,
+    /^([A-Za-z0-9]{22})$/
+  ];
+  for (const p of patterns) {
+    const m = raw.match(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function onQrDetected(raw) {
+  if (locked) return;
+  const trackId = extractTrackId(raw);
+  if (!trackId) { setHint('Kein gültiger Hitster-QR-Code'); return; }
+  locked = true;
+  stopScanner();
+  window.location.href = `${BASE_URL}?id=${trackId}`;
+}
+
+function stopScanner() {
+  if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+async function startScanner() {
+  locked = false;
+  document.getElementById('scanner-wrap').style.display = 'block';
+  document.getElementById('hint').style.display = 'block';
+  document.getElementById('error-box').style.display = 'none';
+  setHint('Kamera wird gestartet…');
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    const video = document.getElementById('scanner-video');
+    video.srcObject = stream;
+    await video.play();
+    setHint('QR-Code auf die Karte richten');
+    startDetection(video);
+  } catch(e) {
+    showError('Kamerazugriff verweigert. Bitte Berechtigung in den Browser-Einstellungen erlauben.');
+  }
+}
+
+function startDetection(video) {
+  // Try native BarcodeDetector first (Android Chrome, Safari 17+)
+  if ('BarcodeDetector' in window) {
+    try {
+      detector = new BarcodeDetector({ formats: ['qr_code'] });
+      detectNative(video);
+      return;
+    } catch(e) {}
+  }
+  // Fallback: canvas + manual pixel check via interval
+  detectCanvas(video);
+}
+
+async function detectNative(video) {
+  if (locked) return;
+  try {
+    const codes = await detector.detect(video);
+    if (codes.length > 0) {
+      onQrDetected(codes[0].rawValue);
+      return;
+    }
+  } catch(e) {}
+  animFrame = requestAnimationFrame(() => detectNative(video));
+}
+
+function detectCanvas(video) {
+  // jsQR fallback via canvas – load jsQR dynamically
+  const script = document.createElement('script');
+  script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
+  script.onload = () => {
+    setHint('QR-Code auf die Karte richten');
+    const canvas = document.getElementById('scanner-canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    function scan() {
+      if (locked) return;
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+        if (code && code.data) { onQrDetected(code.data); return; }
+      }
+      animFrame = requestAnimationFrame(scan);
+    }
+    animFrame = requestAnimationFrame(scan);
+  };
+  script.onerror = () => {
+    showError('QR-Scanner konnte nicht geladen werden. Bitte prüfe deine Internetverbindung.');
+  };
+  document.head.appendChild(script);
+}
+
+startScanner();
+</script>
+</body>
+</html>
