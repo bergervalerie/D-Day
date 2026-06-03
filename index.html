@@ -685,7 +685,7 @@ async function ensureSpotifyPlayer() {
       }, 12000);
 
       spotifyPlayer = new Spotify.Player({
-        name: 'David's Hits(ter) Player',
+        name: "David's Hits(ter) Player",
         getOAuthToken: cb => {
           getValidAccessToken().then(token => cb(token)).catch(error => {
             console.error(error);
