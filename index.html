@@ -272,10 +272,19 @@ async function refreshAccessToken() {
   });
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.access_token) {
-    clearStoredSpotifyToken();
-    throw new Error('Spotify-Login abgelaufen. Bitte neu verbinden.');
-  }
+if (data.error === 'invalid_grant' || (!res.ok && !data.access_token)) {
+  clearStoredSpotifyToken();
+  spotifyDeviceId = null;
+  spotifyPlayer = null;
+  spotifyPlayerPromise = null;
+  spotifySdkPromise = null;
+  show('login-screen');
+  throw new Error('Spotify-Login abgelaufen. Bitte neu verbinden.');
+}
+if (!data.access_token) {
+  clearStoredSpotifyToken();
+  throw new Error('Spotify-Login abgelaufen. Bitte neu verbinden.');
+}
 
   accessToken = data.access_token;
   localStorage.setItem('spotify_token', accessToken);
